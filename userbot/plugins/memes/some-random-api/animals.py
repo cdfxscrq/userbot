@@ -2,7 +2,7 @@ import asyncio
 import re
 
 from pyrogram import filters
-from pyrogram.types import Message
+from pyrogram.types import LinkPreviewOptions, Message, ReplyParameters
 
 from userbot import UserBot
 from userbot.helpers.PyroHelpers import ReplyCheck
@@ -10,7 +10,9 @@ from userbot.helpers.aiohttp_helper import AioHttp
 from userbot.plugins.help import add_command_help
 
 animal = r"([^.]*)$"
-ok_exts = ["jpg", "jpeg", "png"]
+# Skip animations and videos. Anything else is a photo, including URLs with
+# no extension: dog images come from the CDN without one.
+not_photo_exts = ["gif", "mp4", "webm"]
 
 animals_without_facts = ['dog', 'cat', 'panda', 'fox', 'red_panda', 'birb', 'koala', 'kangaroo', 'racoon']
 
@@ -19,18 +21,18 @@ animals_with_facts = ['dog', 'cat', 'panda', 'fox', 'birb', 'koala', 'kangaroo',
 
 
 async def prep_animal_image(input_animal):
-    ext = ""
     image = None
 
-    while ext not in ok_exts:
+    for _ in range(5):
         data = await AioHttp().get_json(f"https://some-random-api.com/animal/{input_animal}")
         image = data['image']
-        ext = re.search(animal, image).group(1).lower()
+        if re.search(animal, image).group(1).lower() not in not_photo_exts:
+            break
 
     return image
 
 
-@UserBot.on_message(filters.command(animals_without_facts, ["."]) & filters.me)
+@UserBot.on_message(filters=filters.command(animals_without_facts, ["."]) & filters.me)
 async def animal_image(bot: UserBot, message: Message):
     cmd = message.command
 
@@ -42,11 +44,11 @@ async def animal_image(bot: UserBot, message: Message):
         await bot.send_photo(
             chat_id=message.chat.id,
             photo=await prep_animal_image(cmd[0].lower()),
-            reply_to_message_id=ReplyCheck(message),
+            reply_parameters=ReplyParameters(message_id=ReplyCheck(message)),
         )
 
 
-@UserBot.on_message(filters.command("fact", ".") & filters.me)
+@UserBot.on_message(filters=filters.command("fact", ".") & filters.me)
 async def fact(bot: UserBot, message: Message):
     cmd = message.command
 
@@ -71,7 +73,7 @@ async def fact(bot: UserBot, message: Message):
             await asyncio.sleep(3)
             await message.delete()
         else:
-            await message.edit(fact_text, disable_web_page_preview=True)
+            await message.edit(fact_text, link_preview_options=LinkPreviewOptions(is_disabled=True))
     else:
         await message.edit("`Unsupported animal...`")
         await asyncio.sleep(2)

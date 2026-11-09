@@ -8,9 +8,9 @@ from pyrogram.types import Message
 from userbot import LOGS, UserBot
 from userbot.plugins.help import add_command_help
 
-bad_words = ["nigga", "nigger", "coon", "retard", "cock", "kiss"]
-good_words = ["black person", "black person", "bruh", "50...40...30...20...RETARD...RETARD", "coke", "keys"]
-vulgar_filter = True
+bad_words = ["nigga", "nigger", "coon", "cock"]
+good_words = ["black person", "black person", "bruh", "coke"]
+vulgar_filter = False
 
 
 def switch():

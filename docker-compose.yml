@@ -1,8 +1,17 @@
-version: '3.5'
 services:
-#########################
   userbot:
+    build:
+      context: .
+      dockerfile: .build/dev.Dockerfile
     hostname: userbot
+    restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     volumes:
       - ./:/root/userbot
-    image: userbot
+    networks:
+      - userbot
+
+networks:
+  userbot:
+    external: false

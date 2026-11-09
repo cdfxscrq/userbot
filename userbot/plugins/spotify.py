@@ -1,4 +1,7 @@
-from pyrogram import emoji, filters
+import asyncio
+
+from pyrogram import filters
+from pyrogram.enums import ParseMode
 from pyrogram.types import Message
 
 from userbot import ALLOWED_USERS, UserBot
@@ -22,7 +25,28 @@ async def now_playing(bot: UserBot, message: Message):
     song = track['name']
     link = track['external_urls']['spotify']
 
-    await message.edit(f'{emoji.MUSICAL_NOTE} Currently Playing: <a href="{link}">{song}</a>')
+    await message.edit(f'🎵 Currently Playing: <a href="{link}">{song}</a>')
+
+
+@UserBot.on_message(filters.command(["npd"], ".") & (filters.me | filters.user(ALLOWED_USERS)))
+async def download_now_playing_song(bot: UserBot, message: Message):
+    current_track = await spotify.now_playing()
+
+    if not current_track:
+        await message.edit("I am not playing any music right now!")
+        return
+
+    if current_track == "API details not set":
+        await message.edit("API details not set. Please read the README!")
+        return
+
+    track = current_track['item']
+    link = track['external_urls']['spotify']
+
+    await asyncio.gather(
+        bot.send_message('@deezermusicbot', link, parse_mode=ParseMode.DISABLED),
+        message.delete()
+    )
 
 
 @UserBot.on_message(

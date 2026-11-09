@@ -6,6 +6,12 @@ from configparser import ConfigParser
 from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
 
+if sys.version_info < (3, 12):
+    raise SystemExit(
+        "Userbot requires Python 3.12 or newer. "
+        "Upgrade Python and recreate your virtual environment."
+    )
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from userbot.userbot import UserBot
@@ -59,12 +65,8 @@ config_file = 'config/userbot.ini'
 config = ConfigParser()
 config.read(config_file)
 
-# MongoDB details
-MONGO_URL = config.get("mongo", "url")
-DB_NAME = config.get("mongo", "db_name", fallback="userbot")
-DB_USERNAME = config.get("mongo", "db_username")
-DB_PASSWORD = config.get("mongo", "db_password")
-IS_ATLAS = config.getboolean("mongo", "is_atlas", fallback=False)
+# Local database. Existing configs work without adding a database section.
+DB_PATH = config.get("database", "path", fallback="config/userbot.sqlite3")
 
 # Other Users
 ALLOWED_USERS = ast.literal_eval(
@@ -84,6 +86,8 @@ SPOTIFY_CLIENT_SECRET = config.get(
 PM_PERMIT = config.get("pm_permit", "pm_permit")
 PM_LIMIT = int(config.get("pm_permit", "pm_limit"))
 LOG_GROUP = config.get("logs", "log_group")
+
+SOCKS5_PROXY = config.get('proxy', 'socks5_proxy', fallback=None)
 
 # Scheduler
 scheduler = AsyncIOScheduler()

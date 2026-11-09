@@ -3,14 +3,14 @@ import os
 import time
 
 from pyrogram import filters
-from pyrogram.types import Message
+from pyrogram.types import Message, ReplyParameters
 
 from userbot import UserBot
 from userbot.helpers.PyroHelpers import ReplyCheck
 from userbot.plugins.help import add_command_help
 
 
-@UserBot.on_message(filters.command(["skyrim", "skill"], ".") & filters.me)
+@UserBot.on_message(filters=filters.command(["skyrim", "skill"], ".") & filters.me)
 async def skyrim(bot: UserBot, message: Message):
     if len(message.command) >= 2:
         text = message.command[1]
@@ -41,7 +41,7 @@ async def skyrim(bot: UserBot, message: Message):
             await bot.send_photo(
                 message.chat.id,
                 "userbot/downloads/skyrim.png",
-                reply_to_message_id=ReplyCheck(message),
+                reply_parameters=ReplyParameters(message_id=ReplyCheck(message)),
             )
             await message.delete()
         except Exception:

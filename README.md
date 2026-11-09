@@ -1,5 +1,5 @@
-# Pyrogram Userbot
-![Python Version](https://img.shields.io/badge/Python-v3.8-blue)
+# Kurigram Userbot
+![Python Version](https://img.shields.io/badge/Python-3.12%2B-blue)
 ![Repo Size](https://img.shields.io/github/repo-size/athphane/userbot)
 [![Commit Activity](https://img.shields.io/github/commit-activity/w/athphane/userbot)](https://github.com/athphane/userbot/pulse)
 [![Codacy Badge](https://api.codacy.com/project/badge/Grade/b10d40c60fc549299eeb7bda1c7501aa)](https://app.codacy.com/manual/athphane/userbot?utm_source=github.com&utm_medium=referral&utm_content=athphane/userbot&utm_campaign=Badge_Grade_Settings)
@@ -12,69 +12,196 @@
 
 <img src="https://i.imgur.com/WXUgDHT.png" width="160" align="right">
 
-> A Telegram Userbot based on [Pyrogram](https://github.com/pyrogram/pyrogram)
+> A Telegram Userbot based on [Kurigram](https://github.com/KurimuzonAkuma/kurigram)
 
 This repository contains the source code of a Telegram Userbot and the instructions for running a
-copy yourself. Beside its main purpose, the bot is featuring [**Pyrogram Asyncio**](https:////github.com/pyrogram/pyrogram/issues/181) and
-[**Smart Plugins**](https://docs.pyrogram.org/topics/smart-plugins); feel free to explore the source code to
+copy yourself. The bot uses Kurigram's asynchronous client and
+[**Smart Plugins**](https://docs.kurigram.icu/topics/smart-plugins); feel free to explore the source code to
 learn more about these topics.
+
+Kurigram keeps the `pyrogram` import namespace. Existing `[pyrogram]` configuration
+and session files continue to use the same names. Native encryption is provided
+by `TgCrypto-pyrofork`, as in KinTab.
 
 I assume you will read this whole README.md file before continuing.
 
 ## Requirements
 You're gonna need to get the following programs and services either installed on your server
 or signed up for. You must do all. It is a cardinal sin if you don't.
-* Python 3.10 (requirements were generated for 3.10. Python 3.8 is supported from the looks of it.)
-* `virtualenv` installed so that the packages don't interfere with other system packages.
+* Python 3.12 or newer. CI tests dependency installation, bot compatibility, and
+  security on Python 3.12, 3.13, 3.14, and 3.15 for installations without Docker.
+  The Docker images use Python 3.15.
+* Python's `venv` module to keep packages separate from system packages. On
+  Debian/Ubuntu, install the matching package, such as `python3.12-venv`.
+* A C compiler, Python headers, Cairo development headers, and `pkg-config` for
+  SVG-to-PNG rendering. On Debian/Ubuntu, install them with
+  `sudo apt-get install build-essential python3-dev libcairo2-dev pkg-config`.
+  Use the Python development headers matching your interpreter, such as
+  `python3.12-dev` when running Python 3.12.
+  The Docker images include these dependencies.
+* [Deno](https://docs.deno.com/runtime/getting_started/installation/) 2.3+ on `PATH`
+  for YouTube downloads, plus FFmpeg for merging video and audio. Both are included
+  in the Docker images. The `yt-dlp[default]` requirement supplies the matching
+  [YouTube challenge scripts](https://github.com/yt-dlp/yt-dlp/wiki/EJS).
+  HTTP 429 means the service is rate-limiting requests; wait before retrying and
+  check the server/proxy's public IP if it persists. Installing Deno does not
+  remove a rate limit.
 
-* [MongoDB](https://www.mongodb.com) on your server or a free server from 
-[MongoDB Atlas](https://www.mongodb.com/cloud/atlas). (I recommend Atlas as I used it during
-development with no issues.)
-
-* [carbon-now-cli](https://github.com/mixn/carbon-now-cli) on your server too generate code images for the
-[carbon.py](/userbot/plugins/carbon.py) module. I use this CLI tool cause I don't know and couldn't get selenium
-and chromedriver to work nicely on my server/code. I'll be nice and even give you the command to install this.
-I assume you already have NPM installed. 
-    ```
-    Windows: npm install -g carbon-now-cli
-    Linux: sudo npm install -g carbon-now-cli --unsafe-perm=true --allow-root
-    MacOS: I assume almost the same as linux ¯\_(ツ)_/¯
-    ``` 
+* Storage uses SQLite, included with Python. The database is created automatically
+  at `config/userbot.sqlite3`.
 
 ## Installation and Deployment
-*The way I deploy*
+*Without Docker*
 ```bash
 git clone https://github.com/athphane/userbot.git
 cd userbot
-virtualenv venv
+python3.12 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 python -m userbot
 ```
+Use `python3.13`, `python3.14`, or `python3.15` instead of `python3.12` if that is
+the supported interpreter installed on your server. When upgrading from Python
+3.10 or 3.11, recreate the virtual environment with Python 3.12 or newer and
+reinstall the requirements before starting the bot.
+
+When upgrading an existing virtual environment from pyrotgfork, remove the old
+packages before reinstalling so their shared modules are replaced completely:
+```bash
+python -m pip uninstall -y pyrotgfork TgCrypto
+python -m pip install --upgrade --force-reinstall -r requirements.txt
+```
+Docker deployments install the new dependencies in a fresh image.
+
 *Using docker*
 - Save the following content as `docker-compose.yml`
 ```yml
-version: '3.5'
 services:
   userbot:
     hostname: userbot
     volumes:
       - ./config:/root/userbot/config
-    image: userbot
+    image: ghcr.io/athphane/userbot:latest
+    restart: always
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+```
+If you already run Watchtower on this Docker host, these labels opt the userbot
+into automatic updates from `ghcr.io/athphane/userbot:latest`.
+Watchtower must be configured to include this container and allow updates; the
+userbot is also opted in when Watchtower uses `--label-enable`. See the
+[Watchtower container selection documentation](https://containrrr.dev/watchtower/container-selection/)
+for name and scope filters. After adding the labels to an existing deployment,
+run `docker compose up -d userbot` to apply them.
 
+This example uses the published image. The repository's root `docker-compose.yml`
+builds locally and mounts the source checkout, so its labels alone do not enable
+updates from the published image.
+
+- Config \
+ Get your telegram api_id and api_hash from [https://my.telegram.org/apps](https://my.telegram.org/apps) and configure them:
+```
+mkdir config
+wget -O config/userbot.ini https://raw.githubusercontent.com/athphane/userbot/refs/heads/master/userbot.ini.sample
+nano config/userbot.ini
 ```
 - First run:
 ```bash
-docker compose run userbot setup
+docker compose run --rm userbot python -m userbot
 ```
 - Configure userbot and stop container **CTRL+C**
 - Run the container again de-attached:
 ```bash
 docker compose up -d
 ```
+## Local database
+
+PM approvals, ignored users, reminders, profiles, summon settings, sticker rules,
+and auto-replies are stored in `config/userbot.sqlite3`. Python's built-in
+`sqlite3` module handles storage, with no additional package or service.
+The existing `database()["collection"]` and helper APIs remain available.
+ID lookups are indexed; the adapter supports equality filters, string
+`$regex` searches with `$options`, projections, `$set`, `$inc`, `$unset`,
+and upserts. It is a small adapter for the bot's calls, not a full MongoDB driver;
+unsupported operators raise errors. Music, lyrics, and Telegram message searches
+continue to query their existing external services.
+
+The optional configuration below changes the file location. Relative paths are
+resolved from the working directory used to run the bot. Docker's existing
+`./config:/root/userbot/config` mount persists the default file.
+
+```ini
+[database]
+path = config/userbot.sqlite3
+```
+
+Existing configuration files work without this section; old `[mongo]` settings
+are ignored. A new SQLite file starts empty. Existing MongoDB records are **not
+copied automatically**. To preserve them before switching:
+
+1. Stop the bot so records cannot change during export and import.
+2. Export each collection with MongoDB Database Tools. Set `MONGODB_URI` to
+   your existing connection URI and replace `userbot` if your database name differs:
+
+   ```bash
+   mkdir -p exports
+   for collection in auto_replies ignored_users pmpermit profiles self_reminders settings sticker_deleter summon; do
+     mongoexport --uri="$MONGODB_URI" --db=userbot --collection="$collection" --jsonArray --out="exports/$collection.json"
+   done
+   ```
+
+3. Import on the host from the repository root:
+
+   ```bash
+   python userbot/database/migrate.py exports --database config/userbot.sqlite3
+   ```
+
+   For a published Docker image, mount the export directory for this one command:
+
+   ```bash
+   docker compose run --rm -v "$PWD/exports:/exports:ro" userbot python userbot/database/migrate.py /exports --database config/userbot.sqlite3
+   ```
+
+   The importer accepts JSON arrays or newline-delimited JSON and preserves
+   ObjectId values as strings, dates as Python datetimes, and numeric values.
+   It requires only Python's standard library and refuses to merge into
+   nonempty destination collections. All files import in one transaction; a
+   failed import leaves existing records unchanged.
+4. Start the bot and check your reminders and settings. Once verified, remove
+   the old MongoDB service from your deployment. Keep its data and exports
+   until you have verified the migration.
+
+To back up SQLite, stop the bot and copy the database file, or use SQLite's
+`Connection.backup()` API for a running bot. SQLite may create `-wal` and
+`-shm` files while running, so copying only the main file while it is open
+is not a complete backup. Use a local filesystem for the database.
+
+## Social media downloads
+
+Your own TikTok, Instagram, and YouTube Shorts links download automatically in
+any chat. The owner `.dl` reply command also works in any chat. Links from other
+people are ignored until you send `.socialdl on` in that chat or group. Send
+`.socialdl off` there to disable them, `.socialdl status` to check the current
+chat, or `.socialdl list` to see enabled chat IDs. In enabled groups, TikTok,
+Instagram, and YouTube Shorts links download automatically; in enabled private
+chats, supported links download automatically. Only your account can use the
+`.socialdl` and `.dl` commands; incoming `/start`, `/help`, and `/dl` commands
+are ignored.
+
+Chat settings are stored in `config/social_dl_chats.json` and survive restarts.
+The old `enabled`, `allowed_group`, `ignored_users`, and private user allowlist
+settings no longer affect downloads. FFmpeg and ffprobe are needed to make
+YouTube uploads streamable. Instagram still-photo posts are sent as photos,
+including posts with background music; the music is omitted.
+Instagram photo-only carousels (up to 20 images) are sent
+in order as albums of up to 10 photos, with one caption per post. Mixed
+photo/video carousels are not supported by the photo fallback. Media larger than 50 MB is rejected for chat downloads.
+
 ## Spotify integration
+
 To get the Spotify commands working on the Userbot, you need to get a CLIENT_ID and CLIENT_SECRET
-form the [Spotify Developer Portal]('https://developer.spotify.com/dashboard/applications) and add
+form the [Spotify Developer Portal](https://developer.spotify.com/dashboard/applications) and add
 them into your userbot.ini file.
 
 On the Spotify developer portal, make sure to set your application `Redirect URI` to 
@@ -92,7 +219,21 @@ project root of the server that will be running your userbot. This is a one time
 * `.restart` command do not work on Termux as [psutils is not supported on Android](https://github.com/giampaolo/psutil/issues/913). \
 CTRL+C, run `git pull` and `python -m userbot` to update bot on termux.
 
+## Star History
+
+<a href="https://star-history.com/#athphane/userbot&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=athphane/userbot&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=athphane/userbot&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=athphane/userbot&type=Date" />
+  </picture>
+</a>
+
+
 ## Credits, and Thanks to
+*  Dictionary lookups use [FreeDictionaryAPI.com](https://freedictionaryapi.com/),
+   with [Wiktionary](https://en.wiktionary.org/) data under
+   [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
 *  [Dan](https://t.me/haskell) for his [Pyrogram Library](https://github.com/pyrogram/pyrogram)
 *  [Colin Shark](https://t.me/ColinShark) for his [PyroBot](https://git.colinshark.de/PyroBot/PyroBot) which helped with
 most of the useful functions used.

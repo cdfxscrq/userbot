@@ -1,0 +1,334 @@
+"""Best-effort support for Instagram still photos with music."""
+
+import asyncio
+import json
+import math
+import os
+import re
+import time
+
+from yt_dlp import YoutubeDL
+from yt_dlp.extractor.instagram import InstagramIE
+from yt_dlp.networking import Request
+from yt_dlp.utils import ExtractorError
+
+from userbot import LOGS
+
+MAX_ASSET_SIZE = 50 * 1024 * 1024
+
+
+class _InstagramPhotoIE(InstagramIE):
+    """Retain verified photo metadata from yt-dlp's current Instagram extractor."""
+
+    photo_metadata: dict | None = None
+
+    def _extract_product(self, product_info, *args, **kwargs) -> dict:
+        """Inspect the source media before yt-dlp discards still-image formats."""
+        media = product_info[0] if isinstance(product_info, list) else product_info
+        self.photo_metadata = photo_post_details(media)
+        return super()._extract_product(product_info, *args, **kwargs)
+
+
+async def run_process(*args: str, timeout: float = 300) -> tuple[int, bytes, bytes]:
+    """Reap subprocesses on timeout/cancellation before their files are removed."""
+    process = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
+        return process.returncode, stdout, stderr
+    finally:
+        if process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            await process.communicate()
+
+
+def _number(value: object, default: float = 0) -> float:
+    """Coerce metadata timing and dimensions to finite, nonnegative numbers."""
+    try:
+        value = float(value)
+        return value if math.isfinite(value) and value >= 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def photo_details(media: dict) -> dict | None:
+    """Only accept actual single photos, never a failed video's thumbnail."""
+    if (
+        media.get("is_video")
+        or media.get("video_url")
+        or media.get("video_versions")
+        or media.get("carousel_media")
+        or media.get("edge_sidecar_to_children")
+    ):
+        return None
+    if not (
+        media.get("media_type") == 1
+        or media.get("is_video") is False
+        or media.get("__typename") in ("GraphImage", "XDTGraphImage")
+    ):
+        return None
+    candidates = (media.get("image_versions2") or {}).get("candidates") or []
+    candidates = sorted(
+        candidates,
+        key=lambda c: _number(c.get("width")) * _number(c.get("height")),
+        reverse=True,
+    )
+    image_url = next(
+        (c.get("url") for c in candidates if c.get("url")), None
+    ) or media.get("display_url")
+    if not image_url:
+        return None
+
+    music = media.get("music_metadata") or media.get("clips_metadata") or {}
+    info = music.get("music_info") or {}
+    asset = info.get("music_asset_info") or {}
+    consumption = info.get("music_consumption_info") or {}
+    original = music.get("original_sound_info") or {}
+    audio_url = asset.get("progressive_download_url") or original.get(
+        "progressive_download_url"
+    )
+    # Photo posts can expose music directly in clips_music_attribution_info.
+    attribution = media.get("clips_music_attribution_info") or {}
+    audio_url = audio_url or attribution.get("progressive_download_url")
+    start_ms = consumption.get("start_time_in_ms")
+    if start_ms is None:
+        starts = consumption.get("overlap_start_times") or []
+        start_ms = starts[0] if starts else 0
+    duration_ms = consumption.get("duration_in_ms")
+    duration = _number(duration_ms) / 1000 or _number(media.get("video_duration")) or 15
+    caption = media.get("caption") or {}
+    title = caption.get("text") if isinstance(caption, dict) else caption
+    if not title:
+        edges = (media.get("edge_media_to_caption") or {}).get("edges") or []
+        title = (edges[0].get("node") or {}).get("text") if edges else None
+    return {
+        "image_url": image_url,
+        "audio_url": audio_url,
+        "start": _number(start_ms) / 1000,
+        "duration": min(duration, 90),
+        "title": title or "Instagram photo",
+    }
+
+
+def photo_post_details(media):
+    """Accept a single photo or an entirely photographic carousel in order."""
+    children = media.get('carousel_media')
+    if children is None and media.get('edge_sidecar_to_children'):
+        children = [edge.get('node') or {} for edge in
+                    media['edge_sidecar_to_children'].get('edges', [])]
+    if children is None:
+        return photo_details(media)
+    if not children or len(children) > 20:
+        return None
+    photos = [photo_details(child) for child in children]
+    if any(photo is None for photo in photos):
+        return None
+    caption = media.get('caption') or {}
+    title = caption.get('text') if isinstance(caption, dict) else caption
+    edges = (media.get('edge_media_to_caption') or {}).get('edges') or []
+    title = title or ((edges[0].get('node') or {}).get('text') if edges else None)
+    return {'photos': photos, 'title': title or 'Instagram photos'}
+
+
+def _download_asset(client: YoutubeDL, url: str, path: str) -> None:
+    """Download one asset with bounded size and duration."""
+    if not isinstance(url, str) or not url.startswith("https://"):
+        raise ValueError("Invalid Instagram asset URL")
+    deadline = time.monotonic() + 120
+    with client.urlopen(Request(url)) as response, open(path, "wb") as output:
+        size = 0
+        while chunk := response.read(64 * 1024):
+            size += len(chunk)
+            if size > MAX_ASSET_SIZE or time.monotonic() > deadline:
+                raise ValueError("Instagram asset exceeds download limits")
+            output.write(chunk)
+    if not size:
+        raise ValueError("Empty Instagram asset")
+
+
+def _fetch_photo(
+    url: str,
+    temp_dir: str,
+    proxy: str | None,
+    user_agent: str,
+    include_audio: bool = False,
+) -> dict | None:
+    """Fetch verified single-photo metadata and its image and optional audio."""
+    match = re.search(r"instagram\.com/(?:p|reels?|tv)/([\w-]+)", url)
+    if not match:
+        return None
+    headers = {
+        "User-Agent": user_agent,
+        "Referer": url,
+        "X-IG-App-ID": "936619743392459",
+    }
+    with YoutubeDL(
+        {
+            "quiet": True,
+            "no_warnings": True,
+            "ignore_no_formats_error": True,
+            "proxy": proxy or "",
+            "socket_timeout": 20,
+            "http_headers": headers,
+        }
+    ) as client:
+        extractor = _InstagramPhotoIE(client)
+        try:
+            extractor.extract(url)
+        except ExtractorError:
+            LOGS.debug("Instagram photo metadata extraction failed", exc_info=True)
+        details = extractor.photo_metadata
+        if not details:
+            return None
+        if details.get('photos'):
+            details['image_paths'] = []
+            for index, photo in enumerate(details['photos']):
+                path = os.path.join(temp_dir, f'instagram-photo-{index + 1}.jpg')
+                _download_asset(client, photo['image_url'], path)
+                details['image_paths'].append(path)
+            return details
+        image_path = os.path.join(temp_dir, "instagram-photo.jpg")
+        _download_asset(client, details["image_url"], image_path)
+        details["image_path"] = image_path
+        if include_audio and details["audio_url"]:
+            try:
+                audio_path = os.path.join(temp_dir, "instagram-audio.m4a")
+                _download_asset(client, details["audio_url"], audio_path)
+                details["audio_path"] = audio_path
+            except Exception:
+                LOGS.info("Instagram audio unavailable; using photo", exc_info=True)
+        return details
+
+
+async def render_photo(
+    image_path: str,
+    audio_path: str,
+    output_path: str,
+    start: float = 0,
+    duration: float = 15,
+) -> None:
+    """Render a still image with its music clip into a Telegram-compatible video."""
+    code, _, _ = await run_process(
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-y",
+        "-loop",
+        "1",
+        "-framerate",
+        "30",
+        "-i",
+        image_path,
+        "-ss",
+        str(start),
+        "-i",
+        audio_path,
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-vf",
+        "scale=w='min(1080,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2",
+        "-c:v",
+        "libx264",
+        "-tune",
+        "stillimage",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-t",
+        str(duration),
+        "-shortest",
+        "-movflags",
+        "+faststart",
+        output_path,
+        timeout=180,
+    )
+    if code or not os.path.exists(output_path) or not os.path.getsize(output_path):
+        raise ValueError("Photo video rendering failed")
+    # A seek beyond available audio can produce a container without audio.
+    code, stdout, _ = await run_process(
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_streams",
+        "-of",
+        "json",
+        output_path,
+        timeout=15,
+    )
+    streams = json.loads(stdout).get("streams", []) if code == 0 else []
+    if not {"audio", "video"} <= {s.get("codec_type") for s in streams}:
+        raise ValueError("Rendered video is missing audio or video")
+
+
+async def download_instagram_photo(
+    url: str,
+    temp_dir: str,
+    proxy: str | None,
+    user_agent: str,
+    include_audio: bool = False,
+) -> dict | None:
+    """Download original photos, optionally rendering music when requested."""
+    # Shield the worker so cancellation cannot race with temp-directory cleanup.
+    worker = asyncio.create_task(
+        asyncio.to_thread(_fetch_photo, url, temp_dir, proxy, user_agent, include_audio)
+    )
+    try:
+        details = await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        await worker
+        raise
+    if not details:
+        return None
+    if details.get('image_paths'):
+        return {
+            'success': True, 'file_path': details['image_paths'][0],
+            'file_paths': details['image_paths'], 'media_type': 'photos',
+            'title': details['title'], 'platform': 'Instagram',
+            'download_url': url, 'temp_dir': temp_dir,
+        }
+    result = {
+        "success": True,
+        "file_path": details["image_path"],
+        "media_type": "photo",
+        "title": details["title"],
+        "platform": "Instagram",
+        "download_url": url,
+        "temp_dir": temp_dir,
+    }
+    if include_audio and details.get("audio_path"):
+        output = os.path.join(temp_dir, "instagram-photo-video.mp4")
+        try:
+            await render_photo(
+                details["image_path"],
+                details["audio_path"],
+                output,
+                details["start"],
+                details["duration"],
+            )
+            if os.path.getsize(output) > MAX_ASSET_SIZE:
+                raise ValueError("Rendered video exceeds upload limit")
+            result.update(
+                file_path=output,
+                media_type="video",
+                fallback_image_path=details["image_path"],
+            )
+        except Exception:
+            LOGS.info("Instagram photo rendering failed; using photo", exc_info=True)
+    return result

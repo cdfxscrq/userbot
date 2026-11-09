@@ -1,7 +1,7 @@
 import asyncio
 
 from pyrogram import filters
-from pyrogram.types import Message
+from pyrogram.types import Message, ReplyParameters
 
 from userbot import UserBot
 from userbot.helpers.PyroHelpers import ReplyCheck
@@ -11,7 +11,7 @@ from userbot.plugins.help import add_command_help
 gif_categories = ['wink', 'pat', 'hug', 'face-palm']
 
 
-@UserBot.on_message(filters.command(["animu-gif", "anime-gif"], ".") & filters.me)
+@UserBot.on_message(filters=filters.command(["animu-gif", "anime-gif"], ".") & filters.me)
 async def animu_gifs(bot: UserBot, message: Message):
     cmd = message.command
 
@@ -38,7 +38,7 @@ async def animu_gifs(bot: UserBot, message: Message):
             await bot.send_animation(
                 chat_id=message.chat.id,
                 animation=gif,
-                reply_to_message_id=ReplyCheck(message)
+                reply_parameters=ReplyParameters(message_id=ReplyCheck(message))
             )
     else:
         await message.edit("`Unsupported category...`")
@@ -46,7 +46,7 @@ async def animu_gifs(bot: UserBot, message: Message):
         await message.delete()
 
 
-@UserBot.on_message(filters.command(["animu-quote", "anime-quote"], ".") & filters.me)
+@UserBot.on_message(filters=filters.command(["animu-quote", "anime-quote"], ".") & filters.me)
 async def animu_fact(bot: UserBot, message: Message):
     try:
         data = await AioHttp().get_json('https://some-random-api.com/animu/quote')
